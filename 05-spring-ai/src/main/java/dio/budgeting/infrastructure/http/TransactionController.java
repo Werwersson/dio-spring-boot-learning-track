@@ -2,6 +2,7 @@ package dio.budgeting.infrastructure.http;
 
 import dio.budgeting.application.ListTransactionsByCategoryUseCase;
 import dio.budgeting.application.PersistTransactionUseCase;
+import dio.budgeting.application.SummarizeCategoryExpensesUseCase;
 import dio.budgeting.domain.Category;
 import dio.budgeting.infrastructure.http.request.TransactionRequest;
 import dio.budgeting.infrastructure.http.response.TransactionResponse;
@@ -17,6 +18,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.nio.charset.Charset;
+import java.time.LocalDate;
 import java.util.List;
 
 @RestController
@@ -24,23 +26,29 @@ import java.util.List;
 public class TransactionController {
     private final PersistTransactionUseCase persistTransactionUseCase;
     private final ListTransactionsByCategoryUseCase listTransactionsByCategoryUseCase;
+    private final SummarizeCategoryExpensesUseCase summarizeCategoryExpensesUseCase;
 
     private final TranscriptionModel transcriptionModel;
     private final ChatClient chatClient;
     private final TextToSpeechModel textToSpeechModel;
+    private final String systemPromptTemplate;
 
     public TransactionController(PersistTransactionUseCase persistTransactionUseCase,
                                  ListTransactionsByCategoryUseCase listTransactionsByCategoryUseCase,
+                                 SummarizeCategoryExpensesUseCase summarizeCategoryExpensesUseCase,
                                  TranscriptionModel transcriptionModel,
                                  @Value("classpath:prompts/system-message.st") Resource systemPrompt,
                                  ChatClient.Builder chatClientBuilder,
                                  TextToSpeechModel textToSpeechModel) throws IOException {
         this.persistTransactionUseCase = persistTransactionUseCase;
         this.listTransactionsByCategoryUseCase = listTransactionsByCategoryUseCase;
+        this.summarizeCategoryExpensesUseCase = summarizeCategoryExpensesUseCase;
         this.transcriptionModel = transcriptionModel;
+        this.systemPromptTemplate = systemPrompt.getContentAsString(Charset.defaultCharset());
         this.chatClient = chatClientBuilder
-                .defaultSystem(systemPrompt.getContentAsString(Charset.defaultCharset()))
-                .defaultTools(persistTransactionUseCase, listTransactionsByCategoryUseCase)
+                .defaultTools(persistTransactionUseCase,
+                               listTransactionsByCategoryUseCase,
+                               summarizeCategoryExpensesUseCase)
                 .build();
         this.textToSpeechModel = textToSpeechModel;
     }
@@ -54,13 +62,22 @@ public class TransactionController {
 
     @GetMapping("/{category}")
     public List<TransactionResponse> readTransactions(@PathVariable Category category) {
-        return listTransactionsByCategoryUseCase.execute(category).stream().map(TransactionResponse::from).toList();
+        return listTransactionsByCategoryUseCase.execute(category).stream()
+                .map(TransactionResponse::from)
+                .toList();
     }
 
     @PostMapping(value = "/ai", consumes = MediaType.MULTIPART_FORM_DATA_VALUE, produces = "audio/mp3")
     ResponseEntity<Resource> transcribe(@RequestParam("file") MultipartFile file) {
+        // Substitui {today} com a data atual para que a IA entenda "ontem", "este mês", etc.
+        var systemMessage = systemPromptTemplate.replace("{today}", LocalDate.now().toString());
+
         var userMessage = transcriptionModel.transcribe(file.getResource());
-        var result = chatClient.prompt().user(userMessage).call().content();
+        var result = chatClient.prompt()
+                .system(systemMessage)
+                .user(userMessage)
+                .call()
+                .content();
 
         byte[] audio = textToSpeechModel.call(result);
         var resource = new ByteArrayResource(audio);

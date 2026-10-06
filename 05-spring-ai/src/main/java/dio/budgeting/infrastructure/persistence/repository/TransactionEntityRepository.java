@@ -4,9 +4,13 @@ import dio.budgeting.domain.Category;
 import dio.budgeting.infrastructure.persistence.entity.TransactionEntity;
 import org.springframework.data.repository.CrudRepository;
 
+import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
 public interface TransactionEntityRepository extends CrudRepository<TransactionEntity, UUID> {
     List<TransactionEntity> findAllByCategory(Category category);
+
+    List<TransactionEntity> findAllByCategoryIgnoreCaseAndDateBetween(
+            String category, LocalDate startDate, LocalDate endDate);
 }
